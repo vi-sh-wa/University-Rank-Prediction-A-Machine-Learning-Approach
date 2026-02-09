@@ -1,0 +1,521 @@
+---
+Topic : World University Ranking
+Model : Regression
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+raw_data <- read.csv("C:/Users/vishw/OneDrive/Desktop/NU/KL7010 - Principle of DS/World University Rankings.csv", 
+                     header = TRUE)
+str(raw_data)
+```
+
+```{r Calling the packages}
+library(caret)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggcorrplot)
+library(skimr)
+library(naniar)
+library(rstatix)
+library(dataPreparation)
+library(datawizard)
+```
+
+%==============================================================================%
+DATA WRANGLING
+%==============================================================================%
+
+```{r Data Wrangling, warning=FALSE}
+
+df <- raw_data #getting a copy of the data
+
+df$stats_number_students <- gsub(",", "", df$stats_number_students)
+df$stats_pc_intl_students <- gsub("%", "", df$stats_pc_intl_students)
+df$stats_pc_intl_students <- as.numeric(df$stats_pc_intl_students) / 100
+
+
+df$stats_female_male_ratio = gsub(":00", "", df$stats_female_male_ratio)
+
+df$female_male_ratio <- sapply(strsplit(df$stats_female_male_ratio, ":"),
+                               function(x) as.numeric(x[1])/as.numeric(x[2]))
+
+
+df$no_subjects_offered <- sapply(strsplit(as.character(df$subjects_offered),','), 
+                                 function(x) length(x))
+
+df$target <- sapply(strsplit(df$overall_score, '–'),
+                    function(x) mean(as.numeric(x), na.rm=TRUE))
+
+
+df$no_subjects_offered <- as.integer(df$no_subjects_offered)
+
+df$member_level <- as.factor(df$member_level)
+df$record_type <- as.factor(df$record_type)
+df$unaccredited <- as.factor(df$unaccredited)
+
+df$stats_number_students <- as.integer(df$stats_number_students)
+
+df$scores_teaching <- as.numeric(df$scores_teaching)
+df$scores_research <- as.numeric(df$scores_research)
+df$scores_citations <- as.numeric(df$scores_citations)
+df$scores_industry_income <- as.numeric(df$scores_industry_income)
+df$scores_international_outlook <- as.numeric(df$scores_international_outlook)
+```
+
+
+
+```{r}
+length(unique(df$location)) 
+countries <- unique(df$location) 
+
+suppressWarnings(group_by(df, location) %>%
+  summarise(
+    count = n(),
+    max = max(target, na.rm = TRUE),
+    min = min(target, na.rm = TRUE),
+    mean = mean(target, na.rm = TRUE),
+    sd = sd(target, na.rm = TRUE)
+  ))
+
+
+#North_America = c("Canada", "United States", "Turks and Caicos Islands", "Mexico", "Puerto Rico", "Jamaica", "Costa Rica", "Cuba", "Dominican Republic")
+
+#South_America = c("Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador", "Paraguay", "Peru", "Uruguay", "Venezuela")
+
+#Europe = c("Albania", "Andorra", "Austria", "Belarus", "Belgium", "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Georgia", "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Italy", "Kosovo", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova", "Monaco", "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal", "Romania", "Russian Federation", "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland", "Ukraine", "United Kingdom")
+
+#Africa = c("Algeria", "Angola", "Botswana", "Egypt", "Ethiopia", "Ghana", "Kenya", "Libya", "Malawi", "Mauritius", "Morocco", "Mozambique", "Namibia", "Nigeria", "Rwanda", "Senegal", "Somalia", "South Africa", "Sudan", "Tanzania", "Tunisia", "Uganda", "Zambia", "Zimbabwe")
+
+#Middle_East = c("Bahrain", "Iran", "Iraq", "Israel", "Jordan", "Kuwait", "Lebanon", "Northern Cyprus", "Oman", "Palestine", "Qatar", "Saudi Arabia", "Syria", "Turkey", "United Arab Emirates", "Yemen")
+
+#Asia = c("Armenia", "Azerbaijan", "Bangladesh", "Brunei Darussalam", "Cambodia", "China", "Hong Kong", "India", "Indonesia", "Japan", "Kazakhstan", "Kyrgyzstan", "Laos", "Macao", "Malaysia", "Mongolia", "Myanmar", "Nepal", "Pakistan", "Philippines", "Singapore","South Korea", "Sri Lanka", "Taiwan", "Tajikistan", "Thailand", "Turkmenistan", "Uzbekistan", "Vietnam")
+
+#Oceania = c("Australia", "Fiji", "New Zealand")
+
+#df$Region = case_when(df$location %in% Asia ~ "Asia",
+#                      df$location %in% Africa ~ "Africa",
+#                      df$location %in% Europe ~ "Europe",
+#                      df$location %in% Middle_East ~ "Middle_East",
+#                      df$location %in% North_America ~ "North_America",
+#                      df$location %in% South_America ~ "South_America",
+#                      df$location %in% Oceania ~ "Oceania")
+
+df <- select(df, -c(1,13,14,17))
+
+skim_to_wide(df)
+```
+
+
+Checking for zero variance / near zero variance variable and dropping
+them if any. Why?
+
+"closed" & "unaccredited" are constant variables, hence they won't be needed as 
+a predictor variable. It is also observed that the variables "record_type" &
+"member_level" have near zero variance. These variables are uninformative and
+might break our model. Just to be sure we can check the relation between the
+"record_type" & "member_level" vs "target" variable.
+
+```{r NZV}
+nzv <- nearZeroVar(df, saveMetrics = T)
+nzv
+```
+Just to double check let's run a kruskal-Wallis test to check for significance.
+We can't run a anova test as the distribution is not normal. Thought the p value
+is less than the significant value we have to keep in mind that the size of the 
+data is small. Running a kruskal_effsize will give us a more insight on whether
+the variable is practically useful or not. Clearly the magnitude of effect size 
+is small, so we can go ahead and drop them.
+```{r}
+kruskal_test(df, target~member_level)
+kruskal_effsize(df, target~member_level)
+
+kruskal_test(df, target~record_type)
+kruskal_effsize(df, target~record_type)
+```
+```{r}
+pairwise.wilcox.test(df$target, df$member_level)
+pairwise.wilcox.test(df$target, df$record_type)
+```
+
+```{r Droping nzv variables}
+df <- select(df, -c("unaccredited", "closed"))
+#df <- df[, -nearZeroVar(df)]
+```
+
+%==============================================================================%
+SPLITTING THE DATA
+%==============================================================================%
+
+```{r}
+set.seed(777)
+index <- createDataPartition(df$record_type, p=0.75, list=F)
+trainset <- df[index,]
+testset <- df[-index,]
+```
+
+%==============================================================================%
+EXPLORATORY DATA ANALYSIS
+%==============================================================================%
+
+Uni variate Analysis :
+
+```{r Outlier detection}
+boxplot(trainset[1:5]) # all the scores
+boxplot(trainset[9])   # total number of students
+boxplot(trainset[10])  # student:staff ratio
+boxplot(trainset[11])  # % intl students
+boxplot(trainset[12])  # F:M ratio  
+boxplot(trainset[13])  # number of subjects offered
+boxplot(trainset[14])  # target
+```
+
+Examining the box-plot a few variables have outliers. Let us calculate
+the difference mean and sd with and without the outliers. { `quantile()`
+or `summary()` }
+```{r}
+# creating a function to remove outliers
+remove_outlier <- function (x) {x[!x %in% boxplot.stats(x)$out]}
+
+teaching_x <- remove_outlier(trainset$scores_teaching)
+research_x <- remove_outlier(trainset$scores_research)
+students_x <- remove_outlier(trainset$stats_number_students)
+stu.staf_x <- remove_outlier(trainset$stats_student_staff_ratio)
+intl_stud_x <- remove_outlier(trainset$stats_pc_intl_students)
+f.m_x <- remove_outlier(trainset$female_male_ratio)
+
+outlier_det <- data.frame(
+  Mean = c(mean(trainset$scores_teaching, na.rm = T), 
+           mean(trainset$scores_research, na.rm = T), 
+           mean(trainset$stats_number_students, na.rm = T), 
+           mean(trainset$stats_student_staff_rati, na.rm = T),
+           mean(trainset$stats_pc_intl_students, na.rm = T),
+           mean(trainset$female_male_ratio, na.rm = T)),
+  Mean_x = c(mean(teaching_x, na.rm = T), 
+             mean(research_x, na.rm = T), 
+             mean(students_x, na.rm = T), 
+             mean(stu.staf_x, na.rm = T),
+             mean(intl_stud_x, na.rm = T),
+             mean(f.m_x, na.rm = T)),
+  SD = c(sd(trainset$scores_teaching, na.rm = T), 
+         sd(trainset$scores_research, na.rm = T), 
+         sd(trainset$stats_number_students, na.rm = T), 
+         sd(trainset$stats_student_staff_rati, na.rm = T),
+         sd(trainset$stats_pc_intl_students, na.rm = T),
+         sd(trainset$female_male_ratio, na.rm = T)),
+  SD_x = c(sd(teaching_x, na.rm = T), 
+           sd(research_x, na.rm = T), 
+           sd(students_x, na.rm = T), 
+           sd(stu.staf_x, na.rm = T),
+           sd(intl_stud_x, na.rm = T),
+           sd(f.m_x, na.rm = T)),
+  row.names = c("teaching_x", "research_x", "students_x", "stu.staf_x", "intl_stud", "f.m_x"))
+
+outlier_det$mean.diff <- outlier_det$Mean - outlier_det$Mean_x
+outlier_det$sd.diff <- outlier_det$SD - outlier_det$SD_x
+outlier_det %>% mutate_if(is.numeric, round, digits=3)
+```
+
+The fact that the difference in mean and standard deviation before and after removing outliers is very small (in the range of 0-3) suggests that the outliers may not be heavily influencing the mean and standard deviation. However, the magnitude of the difference alone is not sufficient to make a decision.
+
+Different models react differently to outliers. While some models, especially those based on mean and standard deviation (like linear regression), can be sensitive to outliers, others may be more robust. Consider the type of model you are using and its sensitivity to outliers.
+
+Examine the nature of the outliers. Are they data errors, anomalies, or legitimate extreme values? Understanding the context and source of outliers is crucial for making informed decisions.
+
+With a dataset of 2000 rows, removing outliers may have a notable impact on the representativeness of your data. Consider whether the removal of outliers affects the diversity and range of your dataset.
+
+Leverage domain knowledge. If you have subject matter expertise, consult with domain experts to gain insights into whether the outliers are meaningful or should be treated as anomalies.
+
+```{r Correlation, fig.height=8, fig.width=8}
+# continuous variable vs continuous variable 
+
+train.corrmat <- round(cor(trainset %>% select_if(is.numeric), use = 'complete.obs', method = 'spearman'),4)
+#View(train.corrmat)
+ggcorrplot(train.corrmat, hc.order = TRUE, type = "lower",
+   lab = TRUE)
+
+```
+
+
+```{r}
+#Running an kruskal-wallis test between the target variable and location
+kruskal_test(df, target~location)
+kruskal_effsize(df, target~location)
+
+```
+
+```{r}
+trainsetA <- select(trainset, -location) # without location
+
+trainsetB <- trainset #with location
+```
+
+%==============================================================================%
+NULL VALUES & IMPUTATION
+%==============================================================================%
+
+```{r}
+miss_var_summary(trainsetA)
+vis_miss(trainsetA)
+
+miss_var_summary(trainsetB)
+vis_miss(trainsetB)
+```
+
+To find out what type of missing data it is we run the Little MCAR test.
+
+```{r}
+mcar_test(trainsetA %>% select(stats_pc_intl_students, female_male_ratio, 
+                                scores_teaching,scores_research, 
+                                scores_citations,scores_industry_income,
+                                scores_international_outlook,target))
+```
+
+The p value is 1.555691e-09	 which is less than 0.05. This implies that
+missing data is not MCAR (i.e, either MAR/MNAR). MNAR is often plausible
+but it's more complicated to handle it so we normally assume the data is
+MAR and use multiple imputation methods to handle the null values. But
+since the data at hand is small a single imputation would suffice.
+
+(get content from :
+<https://bookdown.org/jefftemplewebb/IS-6489/model-fitting.html#missing-data-imputation>)
+
+
+```{r imputing}
+#without location
+impA <- preProcess(trainsetA, method = c("bagImpute"))
+imp.trainA <- predict(impA, newdata = trainsetA)
+
+#without location
+loc <- trainset$location
+imp.trainB <- cbind(imp.trainA, loc)
+
+#checking if all values are imputed
+anyNA(imp.trainA)
+anyNA(imp.trainB)
+```
+
+%==============================================================================%
+ENCODING
+%==============================================================================%
+
+```{r}
+
+# without location
+imp.trainA$member_level <- as.numeric(imp.trainA$member_level)
+
+enc_trainA <- dummyVars( ~., data=imp.trainA)
+enc.trainA <- data.frame(predict(enc_trainA, newdata = imp.trainA))
+
+enc.trainA <- imp.trainA 
+
+#with location
+
+imp.trainB$member_level <- as.numeric(imp.trainB$member_level)
+
+enc_trainB <- dummyVars( ~., data=imp.trainB)
+enc.trainB <- data.frame(predict(enc_trainB, newdata = imp.trainB))
+
+target_encoding <- build_target_encoding(imp.trainB,
+                                         cols_to_encode = "loc",
+                                         target_col = "target",
+                                         functions = "mean")
+
+enc.trainB <- target_encode(imp.trainB, target_encoding = target_encoding)
+enc.trainB <- enc.trainB %>% select(-loc)
+```
+
+%==============================================================================%
+FEATURE SCALING
+%==============================================================================%
+bring all variables to a similar scale to avoid one variable dominating the 
+others during modeling, then normalizing the entire data frame might be appropriate.
+
+```{r}
+
+#min_max_norm <- function(x) {(x - min(x)) / (max(x) - min(x))}
+norm.trainA <- normalize(enc.trainA)
+norm.trainB <- normalize(enc.trainB)
+```
+
+
+%= == = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =%
+
+%= == = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =%
+
+%==============================================================================%
+PIPELINING
+%==============================================================================%
+We'll have to mimic the operations performed on train set on to the test
+set. i.e. imputation -\> encode -\> normalization 
+
+```{r}
+
+# without location
+testsetA <- select(testset, -location)
+
+t_impA <- preProcess(testsetA, method = c("bagImpute"))
+imp.testA <- predict(t_impA, newdata = testsetA)
+
+imp.testA$member_level <- as.numeric(imp.testA$member_level)
+
+enc_testA <- dummyVars( ~., data=imp.testA)
+enc.testA <- data.frame(predict(enc_testA, newdata = imp.testA))
+
+enc.testA <- imp.testA
+norm.testA <- normalize(enc.testA)
+
+#with location
+testsetB <- testset 
+
+loc <- testsetB$location
+imp.testB <- cbind(imp.testA, loc)
+
+imp.trainB$member_level <- as.numeric(imp.trainB$member_level)
+
+enc_testB <- dummyVars( ~., data=imp.trainB)
+enc.trainA <- data.frame(predict(enc_testB, newdata = imp.trainB))
+
+target_encoding_test <- build_target_encoding(imp.testB,
+                                         cols_to_encode = "loc",
+                                         target_col = "target",
+                                         functions = "mean")
+
+enc.testB <- target_encode(imp.testB, target_encoding = target_encoding_test)
+enc.testB <- enc.testB %>% select(-loc)
+norm.testB <- normalize(enc.testB)
+
+```
+
+%==============================================================================%
+RUNNING THE MODEL
+%==============================================================================%
+
+Can we run a linear regression model ? In this case, no since there are plausible 
+outliers present we decided to not drop remove them. Presence of outliers will
+affect a regression model. Majorly impact the linear regression model. Nevertheless
+we'll run different models and evaluate their respective metrics.
+
+Using caret package 
+
+```{r}
+set.seed(777)
+
+lmA <- train(target~., data = norm.trainA, method = "lm")
+xgbA <- train(target~., data = norm.trainA, method = "xgbLinear")
+rfA <- train(target~., data = norm.trainA, method = "rf")
+svmA <- train(target~., data = norm.trainA, method = "svmLinear")
+
+#Comparing these models
+blind.modelsA <- resamples(list(Linear_A = lmA,
+                               SVM_A = svmA,
+                               RF_A = rfA,
+                               XGBOOST_A = xgbA))
+summary(blind.modelsA)
+```
+
+```{r}
+set.seed(777)
+
+lmB <- train(target~., data = norm.trainB, method = "lm")
+xgbB <- train(target~., data = norm.trainB, method = "xgbLinear")
+rfB <- train(target~., data = norm.trainB, method = "rf")
+svmB <- train(target~., data = norm.trainB, method = "svmLinear")
+
+#Comparing these models
+
+blind.modelsB <- resamples(list(Linear_B = lmB,
+                               SVM_B = svmB,
+                               RF_B = rfB,
+                               XGBOOST_B = xgbB))
+summary(blind.modelsB)
+```
+
+```{r}
+all_blind_models <- resamples(list(Linear_A = lmA, Linear_B = lmB,
+                               SVM_A = svmA, SVM_B = svmB,
+                               RF_A = rfA, RF_B = rfB,
+                               XGBOOST_A = xgbA, XGBOOST_B = xgbB))
+                               
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(all_blind_models, scales=scales, 
+       metric = c("RMSE", "Rsquared"), 
+       pch = '|', arrange = TRUE,
+       do.out=FALSE)
+```
+
+
+
+```{r}
+varImp(rfA)
+varImp(rfB)
+```
+
+Using the model with least RMSE to predict.
+
+```{r fig.width=10}
+#fitting the final model onto test set
+model <- rfA$finalModel
+obs <- norm.testA$target
+pred <- predict(model, newdata = norm.testA)
+output <- data.frame(obs, pred)
+
+scatter.smooth(output$pred, output$obs, col = c("dodgerblue", "#FF3030"), pch = c(10, 19), main = "Scatter Plot", xlab = "Predicted", ylab = "observed")
+abline(a=0, b = 1, col = "#D2691E")
+
+RMSE(pred = pred, obs = obs)
+MAE(pred = pred, obs = obs)
+R2(pred = pred, obs = obs)
+
+```
+
+```{r}
+
+library(metrica)
+
+mets = c("R2", "RMSE", "MAE")
+scatter_plot(output, obs = obs, pred = pred)
+
+
+```
+
+ML Workflow using caret:
+<https://www.machinelearningplus.com/machine-learning/caret-package/#32descriptivestatistics>
+
+<http://zevross.com/blog/2017/09/19/predictive-modeling-and-machine-learning-in-r-with-the-caret-package/#realistic-model-estimates-through-built-in-resampling>
+<https://topepo.github.io/caret/pre-processing.html#pp>
+
+<https://www.mdpi.com/2076-3417/10/7/2344>
+
+
+
+
+
+
+
+
+
+Model Tuning using caret {by running the models n number of times with 1
+repeat, and setting the granularity with `tuneLength`}
+
+```{r}
+# Define the training control
+fitControl <- trainControl(
+    method = 'repeatedcv',                   
+    number = 10)
+
+set.seed(777)
+
+lm.t <- train(target~., data = norm.train, method = "lm", tuneLength = 5)
+
+rf.t <- train(target~., data = norm.train, method = "rf", trCtrl = fitControl, tuneLength = 5)
+
+```
+
+```{r}
+tuned.models <- resamples(list(Linear = lm.t,RF = rf.t))
+summary(tuned.models)
+```
