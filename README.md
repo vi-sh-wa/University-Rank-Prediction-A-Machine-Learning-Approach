@@ -3,6 +3,8 @@
 ## Project Overview
 This project demonstrates the application of data analysis and machine learning to predict the **overall score** of universities worldwide. By analyzing key factors such as research, citations, and international outlook, this model provides insights that help university authorities, prospective students, and government bodies understand the mechanics of global academic rankings.
 
+[🚀 View the Interactive Project Report Here](https://vi-sh-wa.github.io/University-Rank-Prediction-A-Machine-Learning-Approach/Principle of DS.html)
+
 ## Key Features
 * **Predictive Modeling**: Utilizes regression techniques to forecast university scores based on 17 distinct variables.
 * **Comprehensive Preprocessing**: Features advanced data cleaning including type casting, unit conversion, and custom feature engineering (e.g., extracting the number of subjects offered).
